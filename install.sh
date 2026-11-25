@@ -7,6 +7,8 @@
 #   bash install.sh                # fresh install or upgrade
 #   bash install.sh --with-taskmaster # also install the optional TaskMaster backend
 #   bash install.sh --no-taskmaster   # skip the optional TaskMaster backend offer
+#   bash install.sh --with-forgejo    # also install the optional Forgejo intake skill
+#   bash install.sh --no-forgejo      # skip (and remove) the Forgejo intake skill
 #   bash install.sh --check-update # check for newer version only
 #
 # Customize the variables below for your skill repository.
@@ -17,7 +19,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Skill Configuration (customize these per-repo)
 # ---------------------------------------------------------------------------
-REPO_OWNER="anombyte93"
+REPO_OWNER="notjustawebguy"
 REPO_NAME="prd-taskmaster"
 SKILL_NAME="prd-taskmaster"
 VERSION="5.3.1"
@@ -25,6 +27,10 @@ SKILL_DIR="${SKILL_DIR:-${HOME}/.claude/skills/${SKILL_NAME}}"
 ALIAS_NAME="atlas"
 ALIAS_DIR="${HOME}/.claude/skills/${ALIAS_NAME}"
 TASKMASTER_INSTALL_MODE="ask"
+FORGEJO_INSTALL_MODE="ask"
+FORGEJO_ALIAS_NAME="forgejo-intake"
+FORGEJO_ALIAS_DIR="${HOME}/.claude/skills/${FORGEJO_ALIAS_NAME}"
+FORGEJO_ALIAS_MARKER="prd-taskmaster-forgejo-intake-alias"
 
 # ---------------------------------------------------------------------------
 # Internal constants
@@ -126,6 +132,111 @@ offer_taskmaster_backend() {
                     ;;
                 *)
                     warn "Unrecognized answer; skipping optional TaskMaster backend install"
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+set_forgejo_install_mode() {
+    local requested="$1"
+    if [[ "${FORGEJO_INSTALL_MODE}" != "ask" ]] && [[ "${FORGEJO_INSTALL_MODE}" != "${requested}" ]]; then
+        die "Conflicting Forgejo intake flags: choose --with-forgejo or --no-forgejo"
+    fi
+    FORGEJO_INSTALL_MODE="${requested}"
+}
+
+# Optional Forgejo intake: the forge-* engine commands always ship inside the
+# package and stay dormant until a project runs forge-configure. This option
+# only adds the intake skill (queue -> pick -> claim -> Discovery) and a
+# /forgejo-intake alias. No forge address or token is asked for or stored here.
+install_forgejo_intake() {
+    local src_dir="$1"
+    if [[ ! -f "${src_dir}/skills/intake/SKILL.md" ]]; then
+        warn "Forgejo intake skill not found in this release; skipping"
+        return 0
+    fi
+
+    mkdir -p "${SKILL_DIR}/skills"
+    rm -rf "${SKILL_DIR}/skills/intake"
+    cp -r "${src_dir}/skills/intake" "${SKILL_DIR}/skills/intake"
+
+    mkdir -p "${FORGEJO_ALIAS_DIR}"
+    cat > "${FORGEJO_ALIAS_DIR}/SKILL.md" <<FORGEEOF
+---
+name: ${FORGEJO_ALIAS_NAME}
+description: >-
+  Pull approved feature requests (issues labelled Status/Approved) from the
+  project's Forgejo repository and turn one into the goal for a prd-taskmaster
+  run. Use when the user says "check Forgejo", "what's approved", "pull feature
+  requests", "work the backlog", or invokes /forgejo-intake.
+allowed-tools:
+  - Read
+  - Bash
+  - Skill
+  - AskUserQuestion
+---
+
+# /forgejo-intake
+
+<!-- ${FORGEJO_ALIAS_MARKER} -->
+
+This is a thin alias. Immediately Read and follow the intake skill:
+
+\`\`\`
+Read ${SKILL_DIR}/skills/intake/SKILL.md
+\`\`\`
+
+Wherever that skill says \`python3 script.py <command>\`, run
+\`python3 ${SKILL_DIR}/script.py <command>\` from the project directory.
+FORGEEOF
+
+    ok "Installed Forgejo intake skill (/${FORGEJO_ALIAS_NAME})"
+    info "Per project: export FORGEJO_TOKEN, then run"
+    printf "    python3 %s/script.py forge-configure --install-template\n" "${SKILL_DIR}"
+}
+
+remove_forgejo_intake() {
+    rm -rf "${SKILL_DIR}/skills/intake"
+    rmdir "${SKILL_DIR}/skills" 2>/dev/null || true
+    # Only remove the alias if this installer wrote it.
+    if [[ -f "${FORGEJO_ALIAS_DIR}/SKILL.md" ]] \
+        && grep -q "${FORGEJO_ALIAS_MARKER}" "${FORGEJO_ALIAS_DIR}/SKILL.md"; then
+        rm -rf "${FORGEJO_ALIAS_DIR}"
+    fi
+}
+
+offer_forgejo_intake() {
+    local src_dir="$1"
+    case "${FORGEJO_INSTALL_MODE}" in
+        with)
+            install_forgejo_intake "${src_dir}"
+            ;;
+        without)
+            remove_forgejo_intake
+            info "Skipping optional Forgejo intake skill (--no-forgejo)"
+            ;;
+        ask)
+            # An upgrade keeps an earlier opt-in without asking again.
+            if [[ -d "${SKILL_DIR}/skills/intake" ]]; then
+                install_forgejo_intake "${src_dir}"
+                return 0
+            fi
+            if [[ ! -t 0 ]]; then
+                info "Non-interactive shell; skipping optional Forgejo intake skill"
+                info "Use --with-forgejo to pull approved feature requests from a Forgejo repository"
+                return 0
+            fi
+
+            local answer
+            printf "Install optional Forgejo intake skill (approved feature requests become goals)? [y/N] "
+            read -r answer || answer=""
+            case "${answer:-N}" in
+                Y|y|YES|Yes|yes)
+                    install_forgejo_intake "${src_dir}"
+                    ;;
+                *)
+                    info "Skipping optional Forgejo intake skill"
                     ;;
             esac
             ;;
@@ -413,6 +524,7 @@ ALIASEOF
         printf "    rm -rf %s\n" "${legacy_dir}"
     fi
 
+    offer_forgejo_intake "${src_dir}"
     offer_taskmaster_backend
 
     # ------------------------------------------------------------------
@@ -456,6 +568,12 @@ main() {
             --no-taskmaster)
                 set_taskmaster_install_mode "without"
                 ;;
+            --with-forgejo)
+                set_forgejo_install_mode "with"
+                ;;
+            --no-forgejo)
+                set_forgejo_install_mode "without"
+                ;;
             *)
                 die "Unknown argument: $1 (try --help)"
                 ;;
@@ -471,11 +589,13 @@ main() {
             echo "${SKILL_NAME} v${VERSION}"
             ;;
         help)
-            printf "Usage: %s [--with-taskmaster | --no-taskmaster | --check-update | --version | --help]\n" "${0##*/}"
+            printf "Usage: %s [--with-taskmaster | --no-taskmaster | --with-forgejo | --no-forgejo | --check-update | --version | --help]\n" "${0##*/}"
             printf "\n"
             printf "  (no args)           Install or upgrade the skill\n"
             printf "  --with-taskmaster   Install optional task-master-ai package\n"
             printf "  --no-taskmaster     Skip optional TaskMaster backend install\n"
+            printf "  --with-forgejo      Install optional Forgejo intake skill (/forgejo-intake)\n"
+            printf "  --no-forgejo        Skip the Forgejo intake skill; remove it if installed\n"
             printf "  --check-update      Check GitHub for a newer release\n"
             printf "  --version           Print current version\n"
             printf "  --help              Show this help\n"

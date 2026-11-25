@@ -26,6 +26,7 @@ from prd_taskmaster.context_pack import build_context_pack
 from prd_taskmaster import fleet, parallel, task_state, task_provider, plan_output
 from prd_taskmaster.lib import _detect_taskmaster_method
 from prd_taskmaster.reachability_cmd import cmd_reachability_sweep
+from prd_taskmaster import forge
 from prd_taskmaster.tournament.cmd import (
     cmd_tournament_run,
     cmd_tournament_status,
@@ -499,6 +500,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--ledger-path", default=None, help="Watcher ledger path (default: .atlas-ai/tournament/watcher.jsonl)")
 
+    # forge intake — approved feature requests from Forgejo (side channel, not a task provider)
+    p = sub.add_parser("forge-configure", help="Point this project at its Forgejo repository")
+    p.add_argument("--base-url", help="Forge address, e.g. https://git.example.com (default: from git remote origin)")
+    p.add_argument("--owner", help="Repository owner (default: from git remote origin)")
+    p.add_argument("--repo", help="Repository name (default: from git remote origin)")
+    p.add_argument("--token-env", help=f"NAME of the env var holding the access token (default: {forge.DEFAULT_TOKEN_ENV})")
+    p.add_argument("--label", help=f"Label that marks a request as ready to build (default: {forge.DEFAULT_LABEL})")
+    p.add_argument("--install-template", action="store_true",
+                   help="Also copy the feature-request issue template into .forgejo/issue_template/")
+
+    p = sub.add_parser("forge-intake", help="List open Forgejo issues approved for work")
+    p.add_argument("--label", help="Override the configured intake label for this call")
+    p.add_argument("--include-claimed", action="store_true", help="Also list issues this project already claimed")
+
+    p = sub.add_parser("forge-claim", help="Record that an approved Forgejo issue is being worked on")
+    p.add_argument("--issue", required=True, type=int)
+    p.add_argument("--comment", action="store_true", help="Also post a pickup comment on the issue")
+    p.add_argument("--note", default="", help="Extra text appended to the pickup comment")
+
+    p = sub.add_parser("forge-release", help="Forget a claim so the issue is offered again")
+    p.add_argument("--issue", required=True, type=int)
+
     # status — render progress panels
     p = sub.add_parser("status", help="Render Atlas progress panels for the current phase")
     p.add_argument("--phase", default=None, help="Render a specific phase instead of the current one")
@@ -568,6 +591,10 @@ DISPATCH = {
     "context-pack": cmd_context_pack,
     "feedback-add": cmd_feedback_add,
     "feedback-report": cmd_feedback_report,
+    "forge-configure": forge.cmd_forge_configure,
+    "forge-intake": forge.cmd_forge_intake,
+    "forge-claim": forge.cmd_forge_claim,
+    "forge-release": forge.cmd_forge_release,
     "status": cmd_status,
 }
 

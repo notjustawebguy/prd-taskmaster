@@ -41,6 +41,14 @@ canonical execution belongs to the parent's reservation/external-session protoco
 Report actual artifacts/canonical IDs, never manufacture file-mode gate evidence.
 The Flow below applies only to taskmaster-file, including existing legacy stores.
 
+## Forge intake before a new run
+
+When no goal was given and no run is in progress (`current_phase` is null or SETUP, or
+a fresh atlas-kanban project), run `python3 script.py forge-intake` once. If it reports
+`configured: true` and `count > 0`, invoke `/prd:intake` so the user can pick an approved
+Forgejo request as the goal; pass the claimed request on to `/prd:discover`. Not
+configured, empty, or erroring → continue unchanged. A goal the user stated always wins.
+
 ## Flow
 
 1. Call `mcp__plugin_prd_go__preflight()` — get environment state
